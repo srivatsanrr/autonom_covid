@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import LabelEncoder
 import joblib
+from firebase_admin import firestore
 import qrcode
 from sklearn import preprocessing
 import pandas as pd
@@ -14,18 +15,18 @@ from sklearn.pipeline import make_pipeline
 import json
 from sklearn.model_selection import train_test_split
 from flask import Flask, request, jsonify
-
-
-app = Flask(__name__)
+from google.cloud.exceptions import NotFound
+import firebase_admin
+from firebase_admin import credentials
 
 def data_preprocessor(path):
     # Reading data from file
     dat=pd.read_excel(path)
-    
     # remove unnecessary cols
     names=dat['Aadhaar'].values
     mobs=dat['Mobile']
-    dat=dat.drop(["Name","Insurance", "salary", "people_ID", 'Aadhaar', 'Mobile'],  axis=1)
+    email=dat['Email'].values
+    dat=dat.drop(["Name","Insurance", "salary", "people_ID", 'Aadhaar', 'Mobile', 'Email'],  axis=1)
     # Label Encoding
     dat["Region"] = dat["Region"].astype('category').cat.codes
     dat["Gender"] = dat["Gender"].astype('category').cat.codes
@@ -49,7 +50,7 @@ def data_preprocessor(path):
     dat['FT/month']=dat['FT/month'].fillna(int(np.mean(dat['FT/month'])))
     dat['comorbidity'].fillna('ffill', inplace=True)
     dat['cardiological pressure'].fillna('ffill', inplace=True)
-    
+    # print(dat.head())
     # PCA
     ncomp=6
     pca_cov = PCA(n_components=ncomp)
@@ -59,10 +60,10 @@ def data_preprocessor(path):
     # For single sample inference
     if(X.shape[0]==1):
         X=X.reshape(1,-1)
-    return([X, names, mobs])
+    return([X, names, mobs, email])
 
 
-def inference(X,names,mobs,model): 
+def inference(X,names,mobs,email,model): 
     clf = joblib.load(model)
     y=clf.predict(X)
     values = ['High', 'Low', 'Mid']
@@ -76,7 +77,8 @@ def inference(X,names,mobs,model):
     ret_dict=dict(zip(indices,zip(names,mob,y_labels)))
     ret_dict.update( {'length' : l})
     ret_json= json.dumps(ret_dict)
-    return(ret_json)
+    ret1=tuple(zip(email,y_labels))
+    return([ret1,ret_json])
 
 def qrgen(uid, mob, health_flag):
    ret_dict={uid:[mob,health_flag]}
@@ -90,17 +92,29 @@ def qrgen(uid, mob, health_flag):
 '''def main(path, model_path='model_sar.pkl'):
     (X,names)=data_preprocessor(path)
     return inference(X,names, model_path)'''
+def add_risk_score(ret1):
+    db = firestore.client()
+    # (emails,y_labs)=ret1
 
+    for (email,y_lab) in ret1:
+      # docs=db.collection(str(email)).stream()
+      try:
+        doc_ref=db.collection(email).document()  
+        if(doc_ref!=None):
+          doc_ref.set({u'Status':y_lab})
+      except NotFound:
+        continue
 
 @app.route('/main', methods=['GET'])
 def main():
-    (X,names, mobs)=data_preprocessor('Train_Mobile.xlsx')
-    return inference(X,names, mobs,'model_sar.pkl')
-
+    cred = credentials.Certificate("samhar-21151-firebase-adminsdk-w4vxj-35492734bd.json")
+    firebase_admin.initialize_app(cred)
+    (X,names, mobs, email)=data_preprocessor('Train_Mobile.xlsx')
+    [ret1, retjson]=inference(X,names, mobs, email,'model_sar.pkl')
+    add_risk_score(ret1)
+    return retjson
 
 
 
 if __name__ == "__main__":
 	app.run(host='192.168.43.129', debug=True)
-
-
