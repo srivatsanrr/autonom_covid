@@ -2,6 +2,10 @@ from math import cos, asin, sqrt
 from opencage.geocoder import OpenCageGeocode
 import numpy as np
 import pandas as pd
+from flask import Flask, request, jsonify
+from google.cloud.exceptions import NotFound
+import firebase_admin
+from firebase_admin import credentials
 path='Train_pincode.xlsx' # Change accordingly
 def amIHome(myLoc,refLoc):
   (lat1, lon1, lat2, lon2)=(myLoc[0],myLoc[1], refLoc[0],refLoc[1])
@@ -31,8 +35,19 @@ def getPincodeAadhaar(uid):
   pincode=str(dat[dat['Aadhaar']==email]['Pincode'].values[0])
   return pincode
 
-if __name__=='__main__':
+def addIfHome(email, flg):
+  cred = credentials.Certificate("samhar-21151-firebase-adminsdk-w4vxj-35492734bd.json")
+  firebase_admin.initialize_app(cred)
+  db = firestore.client()
+  try:
+    doc_ref=db.collection(email).document('doc')
+    if(doc_ref!=None):
+      doc_ref.set({u'isHome':flg})
+  except NotFound:
+    return
+
+def addHomeStatus(email, myLoc):
   pincode=getPincodeEmail(email) # query Email Id from app 
   homeLoc=findMyHome(pincode)
   check_if_home=amIHome(myLoc,homeLoc) # Where myLoc is a list of latitude and longitude of current device location refLoc is the location of the corresponding pincode address- Home address
-  print(check_if_home)
+  addIfHome(email, check_if_home)
