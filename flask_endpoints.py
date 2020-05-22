@@ -18,10 +18,15 @@ from flask import Flask, request, jsonify
 from google.cloud.exceptions import NotFound
 import firebase_admin
 from firebase_admin import credentials
+from checkpost import *
+
+
+
 
 def data_preprocessor(path):
     # Reading data from file
     dat=pd.read_excel(path)
+    dat=dat.iloc[:100,]
     # remove unnecessary cols
     names=dat['Aadhaar'].values
     mobs=dat['Mobile']
@@ -101,20 +106,32 @@ def add_risk_score(ret1):
       try:
         doc_ref=db.collection(email).document()  
         if(doc_ref!=None):
-          doc_ref.set({u'Status':y_lab})
+          doc_ref.set({u'Mobile':mob,u'Aadhaar':aadhaar, u'Status':y_lab})
       except NotFound:
         continue
 
+def addHomeStatus(email, myLoc):
+  pincode=getPincodeEmail(email)# query Email Id from app 
+  homeLoc=findMyHome(pincode)
+  check_if_home=amIHome(myLoc,homeLoc) # Where myLoc is a list of latitude and longitude of current device location refLoc is the location of the corresponding pincode address- Home address
+  addIfHome(email, check_if_home)
+
+
+app = Flask("__app__")
+
 @app.route('/main', methods=['GET'])
 def main():
-    cred = credentials.Certificate("samhar-21151-firebase-adminsdk-w4vxj-35492734bd.json")
-    firebase_admin.initialize_app(cred)
     (X,names, mobs, email)=data_preprocessor('Train_Mobile.xlsx')
     [ret1, retjson]=inference(X,names, mobs, email,'model_sar.pkl')
     add_risk_score(ret1)
     return retjson
 
+@app.route('/checkpost/<string:email>/<string:lat>/<string:long>', methods=['GET'])
+def checkpost(email, lat, long):
+    print(email, lat, long)
+    addHomeStatus(email, [float(lat), float(long)])
+    return jsonify(1)
 
 
 if __name__ == "__main__":
-	app.run(host='192.168.43.129', debug=True)
+    app.run(host='192.168.43.129', debug=True)

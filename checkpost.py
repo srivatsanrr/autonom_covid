@@ -5,7 +5,9 @@ import pandas as pd
 from flask import Flask, request, jsonify
 from google.cloud.exceptions import NotFound
 import firebase_admin
-from firebase_admin import credentials
+from firebase_admin import credentials, firestore
+cred = credentials.Certificate("samhar-21151-firebase-adminsdk-w4vxj-3d5cbb7790.json")
+firebase_admin.initialize_app(cred)
 path='Train_pincode.xlsx' # Change accordingly
 def amIHome(myLoc,refLoc):
   (lat1, lon1, lat2, lon2)=(myLoc[0],myLoc[1], refLoc[0],refLoc[1])
@@ -36,18 +38,12 @@ def getPincodeAadhaar(uid):
   return pincode
 
 def addIfHome(email, flg):
-  cred = credentials.Certificate("samhar-21151-firebase-adminsdk-w4vxj-35492734bd.json")
-  firebase_admin.initialize_app(cred)
   db = firestore.client()
   try:
     doc_ref=db.collection(email).document('doc')
     if(doc_ref!=None):
-      doc_ref.set({u'isHome':flg})
+      doc_ref.update({u'isHome':flg})
   except NotFound:
-    return
+    pass
 
-def addHomeStatus(email, myLoc):
-  pincode=getPincodeEmail(email) # query Email Id from app 
-  homeLoc=findMyHome(pincode)
-  check_if_home=amIHome(myLoc,homeLoc) # Where myLoc is a list of latitude and longitude of current device location refLoc is the location of the corresponding pincode address- Home address
-  addIfHome(email, check_if_home)
+
