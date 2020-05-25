@@ -2,6 +2,8 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import LabelEncoder
 import joblib
+from firebase_admin import firestore
+import qrcode
 from sklearn import preprocessing
 import pandas as pd
 from sklearn.linear_model import SGDClassifier
@@ -13,17 +15,23 @@ from sklearn.pipeline import make_pipeline
 import json
 from sklearn.model_selection import train_test_split
 from flask import Flask, request, jsonify
+from google.cloud.exceptions import NotFound
+import firebase_admin
+from firebase_admin import credentials
+from checkpost import *
 
 
-app = Flask(__name__)
+
 
 def data_preprocessor(path):
     # Reading data from file
     dat=pd.read_excel(path)
-    
+    dat=dat.iloc[:100,]
     # remove unnecessary cols
-    names=dat['Name'].values
-    dat=dat.drop(["Name","Insurance", "salary", "people_ID"],  axis=1)
+    names=dat['Aadhaar'].values
+    mobs=dat['Mobile']
+    email=dat['Email'].values
+    dat=dat.drop(["Name","Insurance", "salary", "people_ID", 'Aadhaar', 'Mobile', 'Email'],  axis=1)
     # Label Encoding
     dat["Region"] = dat["Region"].astype('category').cat.codes
     dat["Gender"] = dat["Gender"].astype('category').cat.codes
@@ -47,53 +55,83 @@ def data_preprocessor(path):
     dat['FT/month']=dat['FT/month'].fillna(int(np.mean(dat['FT/month'])))
     dat['comorbidity'].fillna('ffill', inplace=True)
     dat['cardiological pressure'].fillna('ffill', inplace=True)
-    
-    # (x-mu / sigma) scaling
-    sclr = preprocessing.StandardScaler()
-    x_scaled = sclr.fit_transform(dat.values)
-    dat = pd.DataFrame(x_scaled)
-    
+    # print(dat.head())
     # PCA
     ncomp=6
     pca_cov = PCA(n_components=ncomp)
-    principalComponents = pca_cov.fit_transform(dat.values)
+    principalComponents = pca_cov.fit_transform(dat.iloc[:,9:])
     principaldf=pd.DataFrame(data = principalComponents, columns = ['pc1', 'pc2','pc3','pc4','pc5','pc6'])
     X=principaldf.values
     # For single sample inference
     if(X.shape[0]==1):
         X=X.reshape(1,-1)
-    return([X, names])
+    return([X, names, mobs, email])
 
 
-def inference(X,names, model): 
+def inference(X,names,mobs,email,model): 
     clf = joblib.load(model)
     y=clf.predict(X)
     values = ['High', 'Low', 'Mid']
     y_labels= [values[i] for i in y]
     names=[str(i) for i in names]
+    mob=[str(i) for i in mobs]
+
     l=len(names)
     indices=[i for i in range(len(names))]
-#     print(indices)
-    ret_dict=dict(zip(indices,zip(names,y_labels)))
+##  Index: AAdhar number, Mobile Number, Risk Factor
+    ret_dict=dict(zip(indices,zip(names,mob,y_labels)))
     ret_dict.update( {'length' : l})
     ret_json= json.dumps(ret_dict)
-    return(ret_json)
+    ret1=tuple(zip(email,y_labels))
+    return([ret1,ret_json])
+
+def qrgen(uid, mob, health_flag):
+   ret_dict={uid:[mob,health_flag]}
+   ret_json= json.dumps(ret_dict)
+   print(ret_json)
+   retstr=str(ret_json)
+   img=qrcode.make(retstr)
+   return img
 
 
 '''def main(path, model_path='model_sar.pkl'):
     (X,names)=data_preprocessor(path)
     return inference(X,names, model_path)'''
+def add_risk_score(ret1):
+    db = firestore.client()
+    # (emails,y_labs)=ret1
 
+    for (email,y_lab) in ret1:
+      # docs=db.collection(str(email)).stream()
+      try:
+        doc_ref=db.collection(email).document()  
+        if(doc_ref!=None):
+          doc_ref.set({u'Mobile':mob,u'Aadhaar':aadhaar, u'Status':y_lab})
+      except NotFound:
+        continue
+
+def addHomeStatus(email, myLoc):
+  pincode=getPincodeEmail(email)# query Email Id from app 
+  homeLoc=findMyHome(pincode)
+  check_if_home=amIHome(myLoc,homeLoc) # Where myLoc is a list of latitude and longitude of current device location refLoc is the location of the corresponding pincode address- Home address
+  addIfHome(email, check_if_home)
+
+
+app = Flask("__app__")
 
 @app.route('/main', methods=['GET'])
 def main():
-    (X,names)=data_preprocessor('Train_UID.xlsx')
-    return inference(X,names, 'model_sar.pkl')
+    (X,names, mobs, email)=data_preprocessor('Train_Mobile.xlsx')
+    [ret1, retjson]=inference(X,names, mobs, email,'model_sar.pkl')
+    add_risk_score(ret1)
+    return retjson
 
-
+@app.route('/checkpost/<string:email>/<string:lat>/<string:long>', methods=['GET'])
+def checkpost(email, lat, long):
+    print(email, lat, long)
+    addHomeStatus(email, [float(lat), float(long)])
+    return jsonify(1)
 
 
 if __name__ == "__main__":
-	app.run(host='192.168.43.129', debug=True)
-
-
+    app.run(host='192.168.43.129', debug=True)
